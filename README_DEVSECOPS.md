@@ -35,8 +35,13 @@ Se ejecuta automáticamente con:
 - Activación manual desde GitHub Actions
 
 Este workflow realiza:
+- Análisis completo con **Trivy** para detectar vulnerabilidades en:
+  - Dependencias del proyecto
+  - Código fuente
+  - Archivos requirements.txt
 - Escaneo de dependencias con Safety
 - Análisis detallado con pip-audit
+- Integración con GitHub Security Dashboard mediante reportes SARIF
 - Genera informes en múltiples formatos
 
 ### 4. Análisis de Infraestructura como Código (iac.yml)
@@ -46,6 +51,10 @@ Se ejecuta automáticamente con:
 - Activación manual desde GitHub Actions
 
 Este workflow realiza:
+- Análisis con **KICS** (Keeping Infrastructure as Code Secure) para detectar problemas en:
+  - Archivos de configuración
+  - Definiciones de infraestructura
+  - Scripts y manifiestos
 - Análisis de archivos Docker con Hadolint
 - Validación de archivos YAML con yamllint
 - Revisión de variables de entorno y configuraciones
@@ -123,16 +132,37 @@ Para que la integración con DefectDojo funcione, debes añadir estos secretos e
 3. Descarga los artefactos para ver los informes detallados:
    - `security-analysis`: Resultados del pipeline CI/CD
    - `security-scan-results`: Resultados del análisis SAST
-   - `sca-reports`: Resultados del análisis de dependencias
-   - `iac-reports`: Resultados del análisis de infraestructura
+   - `sca-reports`: Resultados del análisis de dependencias con Trivy, Safety y pip-audit
+   - `iac-reports`: Resultados del análisis de infraestructura con KICS y otras herramientas
    - `security-test-reports`: Resultados de las pruebas de seguridad
    - `dast-reports`: Resultados del análisis dinámico
+
+### Resultados en GitHub Security
+Los resultados de Trivy se integran con GitHub Security Dashboard, permitiendo ver las vulnerabilidades directamente en GitHub (si tienes habilitada la funcionalidad de GitHub Advanced Security).
 
 ### Resultados en DefectDojo
 Si has configurado la integración con DefectDojo:
 1. Accede a tu instancia de DefectDojo
 2. Ve al producto y engagement que configuraste
 3. Revisa los hallazgos importados automáticamente desde los workflows
+
+## Herramientas de Seguridad Integradas
+
+### KICS (Keeping Infrastructure as Code Secure)
+KICS es una herramienta de análisis estático para infraestructura como código que permite identificar problemas de seguridad, cumplimiento y buenas prácticas en archivos de configuración. Analiza una amplia variedad de plataformas y frameworks como:
+- Terraform, CloudFormation, Kubernetes
+- Docker, Ansible, Serverless
+- Archivos de configuración generales
+
+### Trivy
+Trivy es un escáner completo de vulnerabilidades para múltiples componentes:
+- Dependencias (Python, Node.js, Java, etc.)
+- Imágenes de contenedores
+- Código fuente
+- Configuraciones y archivos IaC
+- Sistemas de archivos completos
+
+Trivy genera informes detallados con referencias a bases de datos de vulnerabilidades como CVE, ayudando a priorizar las mitigaciones.
 
 ## Solución de Problemas
 
@@ -154,6 +184,11 @@ Si has configurado la integración con DefectDojo:
 - Comprueba que los IDs de producto y engagement son válidos
 - Revisa los logs del workflow para ver mensajes de error específicos
 
+### Problemas con KICS o Trivy
+- Asegúrate de que los permisos del repositorio permiten acciones de escritura para security-events
+- Revisa los logs de ejecución para ver mensajes de error específicos
+- Para Trivy, verifica que el archivo requirements.txt está en el formato correcto
+
 ## Referencias
 
 - [GitHub Actions Documentation](https://docs.github.com/es/actions)
@@ -161,4 +196,6 @@ Si has configurado la integración con DefectDojo:
 - [DefectDojo](https://defectdojo.github.io/django-DefectDojo/)
 - [Bandit](https://bandit.readthedocs.io/)
 - [Safety](https://pyup.io/safety/)
-- [CodeQL](https://codeql.github.com/) 
+- [CodeQL](https://codeql.github.com/)
+- [KICS](https://kics.io/index.html)
+- [Trivy](https://trivy.dev/latest/) 

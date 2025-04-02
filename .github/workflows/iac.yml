@@ -19,6 +19,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         
+      # Crear directorio para informes
+      - name: Create reports directory
+        run: mkdir -p ./iac-reports
+        
+      # Analizar con KICS (Keeping Infrastructure as Code Secure)
+      - name: Run KICS Scan
+        uses: checkmarx/kics-github-action@v1.7.0
+        with:
+          path: '.'
+          output_path: './iac-reports'
+          output_formats: 'json,sarif'
+          exclude_paths: "node_modules,**/.git/**,**/*cache*/**"
+          fail_on: high
+          enable_comments: false
+          output_name: kics-results
+        continue-on-error: true
+          
       # Analizar archivos de Docker con Hadolint
       - name: Run Hadolint
         uses: hadolint/hadolint-action@v3.1.0
@@ -27,10 +44,6 @@ jobs:
           output-file: ./iac-reports/hadolint-results.sarif
           format: sarif
           no-fail: true
-          
-      # Crear directorio para informes
-      - name: Create reports directory
-        run: mkdir -p ./iac-reports
           
       # Analizar archivos de configuración YAML con yamllint
       - name: Install yamllint
@@ -48,6 +61,30 @@ jobs:
           echo "Ejecutado en: $(date)" >> ./iac-reports/docker-check.txt
           echo "\nBuscando archivos Docker..." >> ./iac-reports/docker-check.txt
           find . -name "Dockerfile" -o -name "docker-compose.yml" | tee -a ./iac-reports/docker-check.txt || true
+          
+      # Generar informe de resumen de KICS
+      - name: Generate KICS summary
+        if: always()
+        run: |
+          if [ -f "./iac-reports/kics-results.json" ]; then
+            echo "# Resumen de análisis KICS" > ./iac-reports/kics-summary.txt
+            echo "Ejecutado en: $(date)" >> ./iac-reports/kics-summary.txt
+            
+            # Extraer y mostrar el número de resultados
+            echo "\n## Resultados encontrados:" >> ./iac-reports/kics-summary.txt
+            cat ./iac-reports/kics-results.json | grep -o '"total": [0-9]*' | head -1 >> ./iac-reports/kics-summary.txt || echo "No se pudo extraer el total de resultados" >> ./iac-reports/kics-summary.txt
+            
+            # Extraer y mostrar severidades
+            echo "\n## Distribución por severidad:" >> ./iac-reports/kics-summary.txt
+            cat ./iac-reports/kics-results.json | grep -o '"severity_counters": {[^}]*}' >> ./iac-reports/kics-summary.txt || echo "No se pudo extraer las severidades" >> ./iac-reports/kics-summary.txt
+            
+            echo "\n## Plataformas analizadas:" >> ./iac-reports/kics-summary.txt
+            cat ./iac-reports/kics-results.json | grep -o '"platforms": \[[^\]]*\]' >> ./iac-reports/kics-summary.txt || echo "No se pudo extraer las plataformas" >> ./iac-reports/kics-summary.txt
+          else
+            echo "# Resumen de análisis KICS" > ./iac-reports/kics-summary.txt
+            echo "Ejecutado en: $(date)" >> ./iac-reports/kics-summary.txt
+            echo "\nNo se generó el informe de KICS correctamente." >> ./iac-reports/kics-summary.txt
+          fi
           
       # Analizar variables de entorno en archivos .env (si existen)
       - name: Check environment files
