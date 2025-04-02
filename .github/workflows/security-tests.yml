@@ -1,0 +1,49 @@
+name: Security Tests Pipeline
+
+on:
+  push:
+    branches: [ develop, feature/security_team7 ]
+  pull_request:
+    branches: [ develop, main ]
+  schedule:
+    - cron: '0 0 * * *'  # Ejecutar diariamente a medianoche
+  workflow_dispatch:
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install safety bandit
+          
+      - name: Ejecutar tests de seguridad automatizados
+        run: |
+          python security_tests/security_checks.py
+          
+      - name: Análisis de seguridad con Bandit
+        run: |
+          bandit -r . -x ./venv,./tests -f json -o bandit-results.json
+          
+      - name: Subir resultados de seguridad
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-test-results
+          path: |
+            security-report.json
+            bandit-results.json
+            
+      - name: Enviar resultados a DefectDojo
+        if: always()
+        run: |
+          echo "Enviando resultados a DefectDojo para su gestión"
+          # Aquí iría el código para enviar los resultados a DefectDojo 

@@ -1,0 +1,110 @@
+name: SAST Pipeline
+
+on:
+  push:
+    branches: [ develop, feature/security_team7 ]
+  pull_request:
+    branches: [ develop, main ]
+  schedule:
+    - cron: '0 0 * * 1'  # Ejecuta cada lunes a las 00:00
+
+jobs:
+  codeql-analysis:
+    name: Análisis de Código Estático con CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v3
+
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      # Inicializar el análisis de CodeQL
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python
+          queries: security-and-quality
+      
+      # Ejecutar análisis de CodeQL
+      - name: Analizar con CodeQL
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:python"
+      
+      # Ejecutar bandit para análisis específico de Python
+      - name: Analizar con Bandit
+        run: |
+          pip install bandit
+          bandit -r . -x ./venv,./tests -f json -o bandit-results.json
+      
+      - name: Subir resultados de Bandit
+        uses: actions/upload-artifact@v3
+        with:
+          name: bandit-results
+          path: bandit-results.json
+      
+      - name: Convertir resultados para DefectDojo
+        run: |
+          # Crear formato compatible con DefectDojo
+          pip install requests
+          
+          python -c "
+          import json
+          import sys
+          
+          try:
+              # Cargar resultados de Bandit
+              with open('bandit-results.json') as f:
+                  try:
+                      bandit_data = json.load(f)
+                  except json.JSONDecodeError:
+                      bandit_data = {'results': []}
+              
+              findings = []
+              
+              # Procesar resultados de Bandit
+              for result in bandit_data.get('results', []):
+                  findings.append({
+                      'title': f\"Bandit: {result.get('test_id', '')} - {result.get('test_name', '')}\",
+                      'description': result.get('issue_text', ''),
+                      'severity': 'High' if result.get('issue_severity', '') == 'HIGH' else
+                                'Medium' if result.get('issue_severity', '') == 'MEDIUM' else 'Low',
+                      'file_path': result.get('filename', ''),
+                      'line': result.get('line_number', 0)
+                  })
+              
+              # Guardar en formato para DefectDojo
+              with open('security_findings.json', 'w') as f:
+                  json.dump({'findings': findings}, f)
+              
+              print('Conversión completada con éxito')
+          except Exception as e:
+              print(f'Error en la conversión: {str(e)}')
+              sys.exit(1)
+          "
+      
+      - name: Subir resultados para DefectDojo
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-findings
+          path: security_findings.json
+      
+      - name: Enviar resultados a DefectDojo
+        if: always()
+        run: |
+          echo "Enviando resultados a DefectDojo para su gestión"
+          # Aquí iría el código para enviar los resultados a DefectDojo
+          # curl -X POST -H "Authorization: Token ${{ secrets.DEFECTDOJO_API_KEY }}" -F "file=@security_findings.json" -F "scan_type=Generic Findings Import" -F "engagement_name=SAST Analysis" ${{ secrets.DEFECTDOJO_URL }}/api/v2/import-scan/ 

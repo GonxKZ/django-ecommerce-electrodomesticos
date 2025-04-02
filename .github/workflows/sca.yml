@@ -1,0 +1,46 @@
+name: SCA Pipeline
+
+on:
+  push:
+    branches: [ develop, feature/security_team7 ]
+  pull_request:
+    branches: [ develop, main ]
+  schedule:
+    - cron: '0 0 * * 0'  # Ejecutar semanalmente
+
+jobs:
+  dependency-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Ejecutar OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        id: dependency-check
+        with:
+          project: 'django-ecommerce-electrodomesticos'
+          path: '.'
+          format: 'HTML'
+          out: './reports/dependency-check'
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+            
+      - name: Subir informe de vulnerabilidades
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-check-report
+          path: ./reports/dependency-check
+      
+      - name: Enviar resultados a DefectDojo
+        if: always()
+        run: |
+          echo "Enviando resultados a DefectDojo para su gestión"
+          # Aquí iría el código para enviar los resultados a DefectDojo
+          # curl -X POST -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" -F "file=@./reports/dependency-check/dependency-check-report.xml" https://defectdojo.example.com/api/v2/import-scan/ 
