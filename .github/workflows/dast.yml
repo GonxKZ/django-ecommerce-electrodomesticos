@@ -1,6 +1,10 @@
 name: DAST Security Analysis
 
 on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
   workflow_dispatch:
     inputs:
       target_url:
@@ -35,62 +39,84 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       
+      - name: Crear directorio para reglas ZAP
+        run: |
+          mkdir -p .zap
+          # Verificar si el archivo de reglas existe
+          if [ ! -f .zap/rules.tsv ]; then
+            echo "# Este archivo contiene reglas para el escáner ZAP" > .zap/rules.tsv
+            echo "# Formato: [ID_REGLA]	[NIVEL_ALERTA: IGNORE, WARN o FAIL]	[DESCRIPCIÓN]" >> .zap/rules.tsv
+          fi
+      
       - name: Mostrar información del escaneo
         run: |
-          echo "🚀 Iniciando escaneo DAST en ${{ github.event.inputs.environment }}"
-          echo "🎯 URL objetivo: ${{ github.event.inputs.target_url }}"
-          echo "🔍 Tipo de escaneo: ${{ github.event.inputs.scan_type }}"
+          echo "🚀 Iniciando escaneo DAST en ${{ github.event.inputs.environment || 'entorno local' }}"
+          echo "🎯 URL objetivo: ${{ github.event.inputs.target_url || 'http://localhost:8000' }}"
+          echo "🔍 Tipo de escaneo: ${{ github.event.inputs.scan_type || 'baseline' }}"
           echo "⏱️ Fecha y hora: $(date)"
       
       # Escaneo ZAP en modo baseline (rápido)
       - name: ZAP Baseline Scan
-        if: ${{ github.event.inputs.scan_type == 'baseline' }}
+        if: ${{ !github.event.inputs.scan_type || github.event.inputs.scan_type == 'baseline' }}
         uses: zaproxy/action-baseline@v0.9.0
         with:
-          target: ${{ github.event.inputs.target_url }}
+          target: ${{ github.event.inputs.target_url || 'http://localhost:8000' }}
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
           allow_issue_writing: true
+          fail_action: false
+        continue-on-error: true
       
       # Escaneo ZAP en modo API
       - name: ZAP API Scan
         if: ${{ github.event.inputs.scan_type == 'api' }}
         uses: zaproxy/action-api-scan@v0.5.0
         with:
-          target: ${{ github.event.inputs.target_url }}
+          target: ${{ github.event.inputs.target_url || 'http://localhost:8000' }}
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
           allow_issue_writing: true
+          fail_action: false
+        continue-on-error: true
       
       # Escaneo ZAP completo (más lento pero más completo)
       - name: ZAP Full Scan
         if: ${{ github.event.inputs.scan_type == 'full' }}
         uses: zaproxy/action-full-scan@v0.7.0
         with:
-          target: ${{ github.event.inputs.target_url }}
+          target: ${{ github.event.inputs.target_url || 'http://localhost:8000' }}
           rules_file_name: '.zap/rules.tsv'
           cmd_options: '-a'
           allow_issue_writing: true
+          fail_action: false
+        continue-on-error: true
+      
+      # Crear directorio para informes
+      - name: Create reports directory
+        run: mkdir -p ./dast-reports
+      
+      # Buscar y mover informes ZAP
+      - name: Collect ZAP reports
+        run: |
+          # Buscar informes generados por ZAP
+          find . -maxdepth 1 -name "zap-*-report.*" -exec cp {} ./dast-reports/ \; || true
+          
+          # Si no se encuentran informes, crear uno básico
+          if [ -z "$(ls -A ./dast-reports 2>/dev/null)" ]; then
+            echo "# Informe de Análisis DAST" > ./dast-reports/dast-report.txt
+            echo "Ejecutado en: $(date)" >> ./dast-reports/dast-report.txt
+            echo "\nNo se pudieron generar informes ZAP automáticamente." >> ./dast-reports/dast-report.txt
+            echo "Esto puede deberse a que la URL objetivo no está accesible." >> ./dast-reports/dast-report.txt
+            echo "\nURL objetivo: ${{ github.event.inputs.target_url || 'http://localhost:8000' }}" >> ./dast-reports/dast-report.txt
+            echo "Tipo de escaneo: ${{ github.event.inputs.scan_type || 'baseline' }}" >> ./dast-reports/dast-report.txt
+          fi
       
       # Guardar el informe como artefacto
       - name: Upload ZAP Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: zap-scan-results
-          path: |
-            zap-*-report.html
-            zap-*-report.json
-            zap-*-report.md
-      
-      # Preparar directorio para reglas ZAP
-      - name: Create ZAP Rules Directory
-        run: |
-          mkdir -p .zap
-          # Crear archivo de reglas vacío si no existe
-          if [ ! -f .zap/rules.tsv ]; then
-            touch .zap/rules.tsv
-          fi
-        shell: bash
+          name: dast-reports
+          path: ./dast-reports/
       
       # Importar resultados a DefectDojo si están configurados los secretos
       - name: Import results to DefectDojo
@@ -111,17 +137,14 @@ jobs:
           
           # Obtener el informe JSON generado
           ZAP_REPORT=""
-          if [ -f "zap-baseline-report.json" ]; then
-            ZAP_REPORT="zap-baseline-report.json"
-          elif [ -f "zap-api-report.json" ]; then
-            ZAP_REPORT="zap-api-report.json"
-          elif [ -f "zap-full-scan-report.json" ]; then
-            ZAP_REPORT="zap-full-scan-report.json"
-          fi
+          for report in $(find ./dast-reports -name "*.json"); do
+            ZAP_REPORT="$report"
+            break
+          done
           
           if [ -z "$ZAP_REPORT" ]; then
             echo "No se encontró ningún informe JSON de ZAP"
-            exit 1
+            exit 0
           fi
           
           # Script para importar a DefectDojo

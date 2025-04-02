@@ -52,22 +52,24 @@ jobs:
 
   deploy-dev:
     needs: build-and-test
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/feature/security_team7'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: Deploy a desarrollo
         run: |
           echo "Desplegando a entorno de desarrollo"
+          echo "Rama actual: ${{ github.ref }}"
           # Aquí irían los comandos para desplegar a desarrollo
 
   deploy-prod:
     needs: build-and-test
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - name: Deploy a producción
         run: |
           echo "Desplegando a entorno de producción"
+          echo "Rama actual: ${{ github.ref }}"
           # Aquí irían los comandos para desplegar a producción 

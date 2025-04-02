@@ -63,15 +63,15 @@ jobs:
           name: security-scan-results
           path: ./security-reports/
           
-      # Análisis con CodeQL (solo si el repositorio es público o hay licencia)
+      # Análisis con CodeQL (usando la versión v3)
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v2
+        uses: github/codeql-action/init@v3
         with:
           languages: python
         continue-on-error: true
           
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v2
+        uses: github/codeql-action/analyze@v3
         with:
           category: "/language:python"
         continue-on-error: true 
