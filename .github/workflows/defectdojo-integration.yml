@@ -2,10 +2,10 @@ name: DefectDojo Integration
 
 on:
   workflow_run:
-    workflows: ["SAST Security Analysis", "CI/CD Pipeline"]
+    workflows: ["SAST Security Analysis", "CI/CD Pipeline", "SCA Pipeline", "Security IaC Pipeline", "Security Tests Pipeline"]
     types:
       - completed
-  workflow_dispatch:  # Permite la activación manual
+  workflow_dispatch:
 
 jobs:
   import-to-defectdojo:
@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
           
-      # Descargar resultados de análisis si están disponibles
+      # Descargar resultados de análisis de varios workflows
       - name: Download artifacts from previous workflow
         id: download-artifacts
         uses: dawidd6/action-download-artifact@v2
@@ -35,7 +35,6 @@ jobs:
         with:
           workflow: ${{ github.event.workflow_run.workflow_id }}
           workflow_conclusion: success
-          name: security-scan-results
           path: ./security-reports/
         continue-on-error: true
           
@@ -46,35 +45,158 @@ jobs:
           echo "Contenido del directorio de reportes:"
           ls -la ./security-reports/ || echo "Directorio vacío o no existe"
           
-      # Obtener los artefactos del workflow de CI/CD si no se encontraron los del SAST
-      - name: Download artifacts from CI/CD
-        if: ${{ github.event_name == 'workflow_run' && steps.download-artifacts.outcome != 'success' }}
+      # Buscar y descargar artefactos de otros workflows de seguridad
+      - name: Download SCA artifacts
         uses: dawidd6/action-download-artifact@v2
         with:
-          workflow: "CI/CD Pipeline"
-          workflow_conclusion: success
-          name: security-analysis
-          path: ./security-reports/
+          workflow: "SCA Pipeline"
+          name: sca-reports
+          path: ./security-reports/sca-reports/
+          check_artifacts: true
+          search_artifacts: true
         continue-on-error: true
+          
+      - name: Download IaC artifacts
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: "Security IaC Pipeline"
+          name: iac-reports
+          path: ./security-reports/iac-reports/
+          check_artifacts: true
+          search_artifacts: true
+        continue-on-error: true
+          
+      - name: Download SAST artifacts
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: "SAST Security Analysis"
+          name: security-scan-results
+          path: ./security-reports/sast-reports/
+          check_artifacts: true
+          search_artifacts: true
+        continue-on-error: true
+          
+      - name: Download Security Tests artifacts
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: "Security Tests Pipeline"
+          name: security-test-reports
+          path: ./security-reports/test-reports/
+          check_artifacts: true
+          search_artifacts: true
+        continue-on-error: true
+          
+      - name: Download DAST artifacts
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: "DAST Security Analysis"
+          name: dast-reports
+          path: ./security-reports/dast-reports/
+          check_artifacts: true
+          search_artifacts: true
+        continue-on-error: true
+          
+      # Recopilar archivos y organizarlos
+      - name: Organize report files
+        run: |
+          mkdir -p ./reports-to-upload
+          
+          # Buscar y copiar todos los archivos JSON y SARIF
+          find ./security-reports -name "*.json" -o -name "*.sarif" -o -name "*.xml" | while read file; do
+            cp "$file" ./reports-to-upload/
+          done
+          
+          echo "Archivos preparados para subir a DefectDojo:"
+          ls -la ./reports-to-upload/
           
       # Importar resultados a DefectDojo
       - name: Import results to DefectDojo
-        env:
-          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
-          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
-          DEFECTDOJO_PRODUCT_ID: ${{ secrets.DEFECTDOJO_PRODUCT_ID }}
-          DEFECTDOJO_ENGAGEMENT_ID: ${{ secrets.DEFECTDOJO_ENGAGEMENT_ID }}
         run: |
-          # Verificar si las variables de entorno están configuradas
-          if [ -z "$DEFECTDOJO_URL" ] || [ -z "$DEFECTDOJO_API_KEY" ] || [ -z "$DEFECTDOJO_ENGAGEMENT_ID" ]; then
-            echo "AVISO: Las variables de entorno para DefectDojo no están configuradas. Saltando la importación."
-            echo "Para configurar la integración, añade los siguientes secretos en GitHub:"
-            echo "- DEFECTDOJO_URL: URL base de DefectDojo"
-            echo "- DEFECTDOJO_API_KEY: Token API de DefectDojo"
-            echo "- DEFECTDOJO_PRODUCT_ID: ID del producto en DefectDojo"
-            echo "- DEFECTDOJO_ENGAGEMENT_ID: ID del engagement en DefectDojo"
-            exit 0
+          # Configuración de DefectDojo directamente en el workflow
+          DEFECTDOJO_URL="https://demo.defectdojo.org"
+          DEFECTDOJO_API_KEY="548afd6fab3bea9794a41b31da0e9404f733e222"
+          DEFECTDOJO_PRODUCT_ID="4"
+          
+          # Crear un engagement si no existe uno activo
+          cat > create_engagement.py << 'EOF'
+          import os
+          import requests
+          import json
+          import sys
+          from datetime import datetime, timedelta
+          
+          # Configuración
+          defectdojo_url = os.environ.get('DEFECTDOJO_URL')
+          api_key = os.environ.get('DEFECTDOJO_API_KEY')
+          product_id = os.environ.get('DEFECTDOJO_PRODUCT_ID')
+          
+          headers = {
+              'Authorization': f'Token {api_key}',
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+          }
+          
+          # Verificar si ya existe un engagement activo para este producto
+          def get_active_engagement():
+              url = f"{defectdojo_url}/api/v2/engagements/?product={product_id}&active=true"
+              response = requests.get(url, headers=headers)
+              
+              if response.status_code == 200:
+                  data = response.json()
+                  if data['count'] > 0:
+                      return data['results'][0]['id']
+              return None
+          
+          # Crear un nuevo engagement si no existe uno activo
+          def create_new_engagement():
+              today = datetime.now().strftime('%Y-%m-%d')
+              end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
+              
+              engagement_data = {
+                  "name": f"GitHub DevSecOps Scan {today}",
+                  "description": "Automated security scan from GitHub Actions",
+                  "target_start": today,
+                  "target_end": end_date,
+                  "product": product_id,
+                  "active": True,
+                  "status": "In Progress",
+                  "engagement_type": "CI/CD"
+              }
+              
+              url = f"{defectdojo_url}/api/v2/engagements/"
+              response = requests.post(url, headers=headers, json=engagement_data)
+              
+              if response.status_code in [200, 201]:
+                  return response.json()['id']
+              else:
+                  print(f"Error al crear el engagement: {response.status_code}")
+                  print(response.text)
+                  return None
+          
+          # Obtener o crear un engagement
+          engagement_id = get_active_engagement()
+          if not engagement_id:
+              engagement_id = create_new_engagement()
+              
+          if engagement_id:
+              print(f"ENGAGEMENT_ID={engagement_id}")
+          else:
+              sys.exit(1)
+          EOF
+          
+          # Ejecutar el script para obtener o crear un engagement
+          export DEFECTDOJO_URL="$DEFECTDOJO_URL"
+          export DEFECTDOJO_API_KEY="$DEFECTDOJO_API_KEY"
+          export DEFECTDOJO_PRODUCT_ID="$DEFECTDOJO_PRODUCT_ID"
+          
+          ENGAGEMENT_ID=$(python create_engagement.py | grep ENGAGEMENT_ID | cut -d= -f2)
+          
+          if [ -z "$ENGAGEMENT_ID" ]; then
+            echo "No se pudo obtener o crear un engagement"
+            exit 1
           fi
+          
+          echo "Usando engagement ID: $ENGAGEMENT_ID"
           
           # Script para importar a DefectDojo
           cat > import_to_defectdojo.py << 'EOF'
@@ -88,11 +210,7 @@ jobs:
           defectdojo_url = os.environ.get('DEFECTDOJO_URL')
           api_key = os.environ.get('DEFECTDOJO_API_KEY')
           product_id = os.environ.get('DEFECTDOJO_PRODUCT_ID')
-          engagement_id = os.environ.get('DEFECTDOJO_ENGAGEMENT_ID')
-          
-          if not all([defectdojo_url, api_key, engagement_id]):
-              print("Error: Se requieren todas las variables de entorno.")
-              sys.exit(1)
+          engagement_id = os.environ.get('ENGAGEMENT_ID')
           
           headers = {
               'Authorization': f'Token {api_key}',
@@ -114,9 +232,6 @@ jobs:
                       if not content or content == '[]':
                           print(f"El archivo {file_path} está vacío o no tiene resultados")
                           return False
-                      
-                      # Intentar cargar como JSON para asegurar que es válido
-                      json.loads(content)
               except Exception as e:
                   print(f"Error al validar el archivo {file_path}: {e}")
                   return False
@@ -147,37 +262,45 @@ jobs:
                   return False
           
           # Buscar archivos de resultados
-          reports_dir = "./security-reports"
+          reports_dir = "./reports-to-upload"
           success = False
           
-          # Buscar y procesar reportes de Bandit
-          bandit_files = glob.glob(f"{reports_dir}/*bandit*.json")
-          for bandit_file in bandit_files:
-              if import_scan(bandit_file, "Bandit Scan"):
-                  success = True
+          # Mapeo de extensiones de archivo y patrones a tipos de escaneo
+          scan_types = [
+              {"pattern": "bandit", "scan_type": "Bandit Scan"},
+              {"pattern": "safety", "scan_type": "Safety Scan"},
+              {"pattern": "pip-audit", "scan_type": "Dependency Scan"},
+              {"pattern": "trivy", "scan_type": "Trivy Scan"},
+              {"pattern": "kics", "scan_type": "KICS Scan"},
+              {"pattern": "hadolint", "scan_type": "Hadolint Scan"},
+              {"pattern": "zap", "scan_type": "ZAP Scan"},
+              {"pattern": "coverage", "scan_type": "Coverage Scan"}
+          ]
           
-          # Buscar y procesar reportes de Safety
-          safety_files = glob.glob(f"{reports_dir}/*safety*.json")
-          for safety_file in safety_files:
-              if import_scan(safety_file, "Safety Scan"):
-                  success = True
-          
-          # Buscar y procesar reportes de pip-audit
-          audit_files = glob.glob(f"{reports_dir}/*pip-audit*.json")
-          for audit_file in audit_files:
-              if import_scan(audit_file, "Dependency Scan"):
-                  success = True
-          
-          # Buscar y procesar reportes de ZAP
-          zap_files = glob.glob(f"{reports_dir}/*zap*.json")
-          for zap_file in zap_files:
-              if import_scan(zap_file, "ZAP Scan"):
-                  success = True
-          
-          # Buscar y procesar reportes de cobertura
-          coverage_files = glob.glob(f"{reports_dir}/*coverage*.xml")
-          for coverage_file in coverage_files:
-              if import_scan(coverage_file, "Coverage Scan"):
+          # Buscar y procesar todos los archivos disponibles
+          for file_path in glob.glob(f"{reports_dir}/*"):
+              filename = os.path.basename(file_path)
+              
+              # Determinar el tipo de escaneo basado en el nombre del archivo
+              scan_type = None
+              for st in scan_types:
+                  if st["pattern"] in filename.lower():
+                      scan_type = st["scan_type"]
+                      break
+                      
+              # Si no se identificó un tipo específico, intentar basado en la extensión
+              if not scan_type:
+                  if filename.endswith('.json'):
+                      scan_type = "Generic JSON Scan"
+                  elif filename.endswith('.sarif'):
+                      scan_type = "Generic SARIF Scan"
+                  elif filename.endswith('.xml'):
+                      scan_type = "Generic XML Scan"
+                  else:
+                      continue  # Saltar archivos no reconocidos
+              
+              # Importar el archivo
+              if import_scan(file_path, scan_type):
                   success = True
           
           if success:
@@ -199,6 +322,9 @@ jobs:
               sys.exit(0)
           EOF
           
-          # Ejecutar el script
+          # Ejecutar el script de importación
+          export ENGAGEMENT_ID="$ENGAGEMENT_ID"
           python import_to_defectdojo.py
-          echo "Proceso de integración con DefectDojo completado" 
+          
+          echo "Proceso de integración con DefectDojo completado"
+          echo "URL de DefectDojo: $DEFECTDOJO_URL/engagement/$ENGAGEMENT_ID" 
