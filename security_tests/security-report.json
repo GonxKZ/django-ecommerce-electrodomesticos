@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-04-02T16:56:08.746825",
+  "tests": [
+    {
+      "name": "Django Security Tests",
+      "status": "FAIL",
+      "output": "\npython: can't open file 'C:\\\\Users\\\\Gonzalo\\\\Documents\\\\4to curso\\\\SSI\\\\PAI4\\\\django-ecommerce-electrodomesticos\\\\security_tests\\\\manage.py': [Errno 2] No such file or directory\n"
+    },
+    {
+      "name": "Django Settings Check",
+      "status": "ERROR",
+      "error": "Requested setting DEBUG, but settings are not configured. You must either define the environment variable DJANGO_SETTINGS_MODULE or call settings.configure() before accessing settings."
+    },
+    {
+      "name": "URL Patterns Check",
+      "status": "ERROR",
+      "error": "[Errno 2] No such file or directory: 'ecommerce_project/urls.py'"
+    },
+    {
+      "name": "Dependencies Check",
+      "status": "ERROR",
+      "error": "[WinError 2] El sistema no puede encontrar el archivo especificado"
+    }
+  ]
+}
