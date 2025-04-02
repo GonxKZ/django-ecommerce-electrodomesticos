@@ -1,0 +1,168 @@
+name: DAST Security Analysis
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'URL de la aplicación para escanear'
+        required: true
+        default: 'http://localhost:8000'
+      scan_type:
+        description: 'Tipo de escaneo (baseline, api, full)'
+        required: true
+        default: 'baseline'
+        type: choice
+        options:
+          - baseline
+          - api
+          - full
+      environment:
+        description: 'Entorno a analizar (desarrollo, producción, otro)'
+        required: true
+        default: 'desarrollo'
+        type: choice
+        options:
+          - desarrollo
+          - producción
+          - staging
+          - otro
+
+jobs:
+  zap-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+      
+      - name: Mostrar información del escaneo
+        run: |
+          echo "🚀 Iniciando escaneo DAST en ${{ github.event.inputs.environment }}"
+          echo "🎯 URL objetivo: ${{ github.event.inputs.target_url }}"
+          echo "🔍 Tipo de escaneo: ${{ github.event.inputs.scan_type }}"
+          echo "⏱️ Fecha y hora: $(date)"
+      
+      # Escaneo ZAP en modo baseline (rápido)
+      - name: ZAP Baseline Scan
+        if: ${{ github.event.inputs.scan_type == 'baseline' }}
+        uses: zaproxy/action-baseline@v0.9.0
+        with:
+          target: ${{ github.event.inputs.target_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          allow_issue_writing: true
+      
+      # Escaneo ZAP en modo API
+      - name: ZAP API Scan
+        if: ${{ github.event.inputs.scan_type == 'api' }}
+        uses: zaproxy/action-api-scan@v0.5.0
+        with:
+          target: ${{ github.event.inputs.target_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          allow_issue_writing: true
+      
+      # Escaneo ZAP completo (más lento pero más completo)
+      - name: ZAP Full Scan
+        if: ${{ github.event.inputs.scan_type == 'full' }}
+        uses: zaproxy/action-full-scan@v0.7.0
+        with:
+          target: ${{ github.event.inputs.target_url }}
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          allow_issue_writing: true
+      
+      # Guardar el informe como artefacto
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-scan-results
+          path: |
+            zap-*-report.html
+            zap-*-report.json
+            zap-*-report.md
+      
+      # Preparar directorio para reglas ZAP
+      - name: Create ZAP Rules Directory
+        run: |
+          mkdir -p .zap
+          # Crear archivo de reglas vacío si no existe
+          if [ ! -f .zap/rules.tsv ]; then
+            touch .zap/rules.tsv
+          fi
+        shell: bash
+      
+      # Importar resultados a DefectDojo si están configurados los secretos
+      - name: Import results to DefectDojo
+        env:
+          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+          DEFECTDOJO_ENGAGEMENT_ID: ${{ secrets.DEFECTDOJO_ENGAGEMENT_ID }}
+        run: |
+          # Verificar si las variables de entorno están configuradas
+          if [ -z "$DEFECTDOJO_URL" ] || [ -z "$DEFECTDOJO_API_KEY" ] || [ -z "$DEFECTDOJO_ENGAGEMENT_ID" ]; then
+            echo "AVISO: Las variables de entorno para DefectDojo no están configuradas."
+            echo "Los resultados del escaneo están disponibles como artefactos."
+            exit 0
+          fi
+          
+          # Instalar dependencias
+          pip install requests
+          
+          # Obtener el informe JSON generado
+          ZAP_REPORT=""
+          if [ -f "zap-baseline-report.json" ]; then
+            ZAP_REPORT="zap-baseline-report.json"
+          elif [ -f "zap-api-report.json" ]; then
+            ZAP_REPORT="zap-api-report.json"
+          elif [ -f "zap-full-scan-report.json" ]; then
+            ZAP_REPORT="zap-full-scan-report.json"
+          fi
+          
+          if [ -z "$ZAP_REPORT" ]; then
+            echo "No se encontró ningún informe JSON de ZAP"
+            exit 1
+          fi
+          
+          # Script para importar a DefectDojo
+          python - << EOF
+          import os
+          import requests
+          import json
+          
+          # Configuración
+          defectdojo_url = os.environ.get('DEFECTDOJO_URL')
+          api_key = os.environ.get('DEFECTDOJO_API_KEY')
+          engagement_id = os.environ.get('DEFECTDOJO_ENGAGEMENT_ID')
+          report_file = "$ZAP_REPORT"
+          
+          headers = {
+              'Authorization': f'Token {api_key}',
+              'Accept': 'application/json',
+          }
+          
+          # Importar resultados
+          import_url = f"{defectdojo_url}/api/v2/import-scan/"
+          
+          files = {'file': open(report_file, 'rb')}
+          data = {
+              'scan_type': 'ZAP Scan',
+              'engagement': engagement_id,
+              'verified': 'false',
+              'active': 'true',
+              'close_old_findings': 'true',
+          }
+          
+          try:
+              response = requests.post(import_url, headers=headers, files=files, data=data)
+              if response.status_code in [200, 201]:
+                  print(f"Importación exitosa a DefectDojo")
+                  print(response.json())
+              else:
+                  print(f"Error en la importación: {response.status_code}")
+                  print(response.text)
+          except Exception as e:
+              print(f"Excepción durante la importación: {e}")
+          EOF
+          
+          echo "Proceso de integración con DefectDojo completado" 

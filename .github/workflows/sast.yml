@@ -1,0 +1,77 @@
+name: SAST Security Analysis
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  security-scanning:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install django pillow stripe
+          fi
+          pip install bandit safety
+
+      # Análisis de código estático con Bandit
+      - name: Run Bandit
+        run: |
+          mkdir -p ./security-reports
+          bandit -r . -x ./venv,./tests,./*/migrations -ll -f json -o ./security-reports/bandit-results.json || true
+          echo "Análisis Bandit completado"
+          
+      # Escaneo de dependencias con Safety
+      - name: Check dependencies with Safety
+        run: |
+          pip freeze > requirements-freeze.txt
+          safety check -r requirements-freeze.txt --json > ./security-reports/safety-results.json || true
+          echo "Análisis Safety completado"
+          
+      # Análisis de composición de software (SCA)
+      - name: Run pip-audit for SCA
+        run: |
+          pip install pip-audit
+          pip-audit --format json > ./security-reports/pip-audit-results.json || true
+          echo "Análisis pip-audit completado"
+          
+      # Sube todos los resultados como un único artefacto
+      - name: Upload security scan results
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-scan-results
+          path: ./security-reports/
+          
+      # Análisis con CodeQL (solo si el repositorio es público o hay licencia)
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python
+        continue-on-error: true
+          
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:python"
+        continue-on-error: true 
