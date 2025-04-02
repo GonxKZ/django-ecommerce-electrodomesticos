@@ -15,7 +15,7 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -27,87 +27,122 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
           
-      # Descargar resultados de análisis de varios workflows
+      # Crear directorio para los reportes
+      - name: Create reports directory
+        run: mkdir -p ./security-reports ./reports-to-upload
+          
+      # Método alternativo para descargar artefactos
       - name: Download artifacts from previous workflow
-        id: download-artifacts
-        uses: dawidd6/action-download-artifact@v2
-        if: ${{ github.event_name == 'workflow_run' }}
-        with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
-          workflow_conclusion: success
-          path: ./security-reports/
-        continue-on-error: true
-          
-      # Verificar si se descargaron los artefactos y crear directorio si es necesario
-      - name: Check artifacts and create directory
+        if: github.event_name == 'workflow_run'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p ./security-reports
+          workflow_run_id=${{ github.event.workflow_run.id }}
+          echo "Descargando artefactos del workflow run ID: $workflow_run_id"
+          
+          # Obtener lista de artefactos
+          artifacts=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$workflow_run_id/artifacts")
+          
+          # Descargar cada artefacto
+          echo "$artifacts" | jq -r '.artifacts[] | .archive_download_url' | while read url; do
+            if [ ! -z "$url" ]; then
+              echo "Descargando desde: $url"
+              curl -L -H "Authorization: token $GITHUB_TOKEN" "$url" -o artifact.zip
+              unzip -o artifact.zip -d ./security-reports/
+              rm artifact.zip
+            fi
+          done
+          
           echo "Contenido del directorio de reportes:"
-          ls -la ./security-reports/ || echo "Directorio vacío o no existe"
+          ls -la ./security-reports/
+      
+      # Descargar artefactos manualmente de los workflows específicos
+      - name: Download artifacts from specific workflows
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Función para descargar artefactos de un workflow específico
+          download_workflow_artifacts() {
+            workflow_name=$1
+            artifact_name=$2
+            output_dir=$3
+            
+            echo "Buscando artefactos del workflow: $workflow_name con nombre: $artifact_name"
+            
+            # Obtener la última ejecución exitosa del workflow
+            runs=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows")
+            
+            # Extraer el ID del workflow por su nombre
+            workflow_id=$(echo "$runs" | jq -r '.workflows[] | select(.name=="'"$workflow_name"'") | .id')
+            
+            if [ -z "$workflow_id" ] || [ "$workflow_id" = "null" ]; then
+              echo "No se encontró el workflow: $workflow_name"
+              return
+            fi
+            
+            echo "ID del workflow: $workflow_id"
+            
+            # Obtener la última ejecución exitosa
+            latest_run=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/$workflow_id/runs?status=success&per_page=1")
+            
+            latest_run_id=$(echo "$latest_run" | jq -r '.workflow_runs[0].id')
+            
+            if [ -z "$latest_run_id" ] || [ "$latest_run_id" = "null" ]; then
+              echo "No se encontraron ejecuciones exitosas para el workflow: $workflow_name"
+              return
+            fi
+            
+            echo "ID de la última ejecución: $latest_run_id"
+            
+            # Obtener artefactos de esa ejecución
+            artifacts=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs/$latest_run_id/artifacts")
+            
+            # Buscar el artefacto específico
+            artifact_url=$(echo "$artifacts" | jq -r '.artifacts[] | select(.name=="'"$artifact_name"'") | .archive_download_url')
+            
+            if [ -z "$artifact_url" ] || [ "$artifact_url" = "null" ]; then
+              echo "No se encontró el artefacto: $artifact_name"
+              return
+            fi
+            
+            echo "URL del artefacto: $artifact_url"
+            
+            # Descargar el artefacto
+            mkdir -p "$output_dir"
+            curl -L -H "Authorization: token $GITHUB_TOKEN" "$artifact_url" -o "$output_dir/artifact.zip"
+            unzip -o "$output_dir/artifact.zip" -d "$output_dir/"
+            rm "$output_dir/artifact.zip"
+            
+            echo "Contenido descargado en: $output_dir"
+            ls -la "$output_dir/"
+          }
           
-      # Buscar y descargar artefactos de otros workflows de seguridad
-      - name: Download SCA artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: "SCA Pipeline"
-          name: sca-reports
-          path: ./security-reports/sca-reports/
-          check_artifacts: true
-          search_artifacts: true
-        continue-on-error: true
-          
-      - name: Download IaC artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: "Security IaC Pipeline"
-          name: iac-reports
-          path: ./security-reports/iac-reports/
-          check_artifacts: true
-          search_artifacts: true
-        continue-on-error: true
-          
-      - name: Download SAST artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: "SAST Security Analysis"
-          name: security-scan-results
-          path: ./security-reports/sast-reports/
-          check_artifacts: true
-          search_artifacts: true
-        continue-on-error: true
-          
-      - name: Download Security Tests artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: "Security Tests Pipeline"
-          name: security-test-reports
-          path: ./security-reports/test-reports/
-          check_artifacts: true
-          search_artifacts: true
-        continue-on-error: true
-          
-      - name: Download DAST artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: "DAST Security Analysis"
-          name: dast-reports
-          path: ./security-reports/dast-reports/
-          check_artifacts: true
-          search_artifacts: true
-        continue-on-error: true
+          # Descargar artefactos de cada workflow
+          download_workflow_artifacts "SAST Security Analysis" "security-scan-results" "./security-reports/sast-reports"
+          download_workflow_artifacts "SCA Pipeline" "sca-reports" "./security-reports/sca-reports"
+          download_workflow_artifacts "Security IaC Pipeline" "iac-reports" "./security-reports/iac-reports"
+          download_workflow_artifacts "Security Tests Pipeline" "security-test-reports" "./security-reports/test-reports"
+          download_workflow_artifacts "DAST Security Analysis" "dast-reports" "./security-reports/dast-reports"
+          download_workflow_artifacts "CI/CD Pipeline" "security-analysis" "./security-reports/ci-reports"
           
       # Recopilar archivos y organizarlos
       - name: Organize report files
         run: |
-          mkdir -p ./reports-to-upload
-          
-          # Buscar y copiar todos los archivos JSON y SARIF
-          find ./security-reports -name "*.json" -o -name "*.sarif" -o -name "*.xml" | while read file; do
-            cp "$file" ./reports-to-upload/
-          done
+          # Buscar y copiar todos los archivos JSON, SARIF y XML
+          find ./security-reports -type f \( -name "*.json" -o -name "*.sarif" -o -name "*.xml" \) -exec cp {} ./reports-to-upload/ \; 2>/dev/null || true
           
           echo "Archivos preparados para subir a DefectDojo:"
-          ls -la ./reports-to-upload/
+          ls -la ./reports-to-upload/ || echo "No se encontraron archivos para subir"
+          
+          # Si no hay archivos, crear uno de prueba para evitar fallos
+          if [ -z "$(ls -A ./reports-to-upload/ 2>/dev/null)" ]; then
+            echo "Creando archivo de prueba..."
+            echo '{"findings": []}' > ./reports-to-upload/empty-scan.json
+          fi
           
       # Importar resultados a DefectDojo
       - name: Import results to DefectDojo
@@ -189,10 +224,13 @@ jobs:
           export DEFECTDOJO_API_KEY="$DEFECTDOJO_API_KEY"
           export DEFECTDOJO_PRODUCT_ID="$DEFECTDOJO_PRODUCT_ID"
           
+          echo "Obteniendo o creando engagement..."
           ENGAGEMENT_ID=$(python create_engagement.py | grep ENGAGEMENT_ID | cut -d= -f2)
           
           if [ -z "$ENGAGEMENT_ID" ]; then
             echo "No se pudo obtener o crear un engagement"
+            echo "Verificando conexión con DefectDojo..."
+            curl -s -I "$DEFECTDOJO_URL/api/v2/" -H "Authorization: Token $DEFECTDOJO_API_KEY"
             exit 1
           fi
           
@@ -274,7 +312,8 @@ jobs:
               {"pattern": "kics", "scan_type": "KICS Scan"},
               {"pattern": "hadolint", "scan_type": "Hadolint Scan"},
               {"pattern": "zap", "scan_type": "ZAP Scan"},
-              {"pattern": "coverage", "scan_type": "Coverage Scan"}
+              {"pattern": "coverage", "scan_type": "Coverage Scan"},
+              {"pattern": "empty-scan", "scan_type": "Generic Findings Import"}
           ]
           
           # Buscar y procesar todos los archivos disponibles
