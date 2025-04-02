@@ -1,0 +1,118 @@
+name: SCA Pipeline
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Create reports directory
+        run: mkdir -p ./sca-reports
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install django pillow stripe
+          fi
+          pip install pip-audit safety
+
+      # Análisis con Trivy para todo tipo de vulnerabilidades (fs para filesystem)
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: './sca-reports/trivy-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '0'  # No fallar si se encuentran vulnerabilidades
+        continue-on-error: true
+
+      # Exportar resultados de Trivy en formato SARIF para GitHub Advanced Security
+      - name: Run Trivy vulnerability scanner (SARIF)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'sarif'
+          output: './sca-reports/trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+        continue-on-error: true
+
+      # Análisis específico para los archivos requirements.txt con Trivy
+      - name: Run Trivy for requirements.txt
+        if: hashFiles('requirements.txt') != ''
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'requirements.txt'
+          format: 'json'
+          output: './sca-reports/trivy-requirements.json'
+        continue-on-error: true
+
+      # Análisis con Safety
+      - name: Run Safety
+        run: |
+          pip freeze > requirements-freeze.txt
+          safety check -r requirements-freeze.txt --json > ./sca-reports/safety-results.json || true
+          echo "Análisis Safety completado"
+
+      # Análisis con pip-audit
+      - name: Run pip-audit
+        run: |
+          pip-audit --format json > ./sca-reports/pip-audit-results.json || true
+          echo "Análisis pip-audit completado"
+
+      # Generar un informe de texto para facilitar la lectura
+      - name: Generate text report
+        run: |
+          echo "# Análisis de Dependencias" > ./sca-reports/sca-report.txt
+          echo "Ejecutado en: $(date)" >> ./sca-reports/sca-report.txt
+          
+          echo "\n## Safety Check" >> ./sca-reports/sca-report.txt
+          safety check -r requirements-freeze.txt || true >> ./sca-reports/sca-report.txt
+          
+          echo "\n## Pip Audit" >> ./sca-reports/sca-report.txt
+          pip-audit || true >> ./sca-reports/sca-report.txt
+          
+          echo "\n## Trivy Summary" >> ./sca-reports/sca-report.txt
+          if [ -f "./sca-reports/trivy-results.json" ]; then
+            echo "Vulnerabilidades encontradas por Trivy:" >> ./sca-reports/sca-report.txt
+            cat ./sca-reports/trivy-results.json | grep -o '"Vulnerabilities": \[[^]]*\]' | wc -l >> ./sca-reports/sca-report.txt || echo "No se pudo extraer el número de vulnerabilidades" >> ./sca-reports/sca-report.txt
+          else
+            echo "No se generó el informe de Trivy correctamente." >> ./sca-reports/sca-report.txt
+          fi
+
+      # Subir resultados de Trivy a GitHub Security
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('./sca-reports/trivy-results.sarif') != ''
+        with:
+          sarif_file: './sca-reports/trivy-results.sarif'
+          category: trivy
+
+      # Subir resultados
+      - name: Upload SCA results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-reports
+          path: ./sca-reports/ 

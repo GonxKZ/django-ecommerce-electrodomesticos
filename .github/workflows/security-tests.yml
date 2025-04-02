@@ -1,0 +1,83 @@
+name: Security Tests Pipeline
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install django pillow stripe
+          fi
+          pip install pytest pytest-django coverage
+
+      - name: Create security test reports directory
+        run: mkdir -p ./security-test-reports
+
+      # Configurar variables de entorno para pruebas
+      - name: Set environment variables
+        run: |
+          echo "DEVELOPMENT=1" >> $GITHUB_ENV
+          echo "DJANGO_SETTINGS_MODULE=tienda.settings" >> $GITHUB_ENV
+          echo "PYTEST_ADDOPTS=--no-header -v" >> $GITHUB_ENV
+
+      # Ejecutar tests de seguridad específicos
+      - name: Run security tests
+        run: |
+          # Buscar tests relacionados con seguridad
+          echo "# Tests de Seguridad" > ./security-test-reports/security-tests.txt
+          echo "Ejecutado en: $(date)" >> ./security-test-reports/security-tests.txt
+          echo "\n## Archivos de pruebas de seguridad encontrados:" >> ./security-test-reports/security-tests.txt
+          find . -path "*/security*/*test*.py" -o -name "*security*test*.py" | tee -a ./security-test-reports/security-tests.txt || true
+          
+          # Ejecutar tests en el directorio security_tests si existe
+          if [ -d "security_tests" ]; then
+            echo "\n## Ejecutando tests en security_tests:" >> ./security-test-reports/security-tests.txt
+            python -m pytest security_tests -v --no-header > ./security-test-reports/security_tests_output.txt || true
+            cat ./security-test-reports/security_tests_output.txt >> ./security-test-reports/security-tests.txt
+          fi
+          
+          # Buscar tests con 'security' en el nombre en otros directorios
+          echo "\n## Buscando y ejecutando otros tests de seguridad:" >> ./security-test-reports/security-tests.txt
+          for test_file in $(find . -path "*/tests/*security*.py" -o -name "*security*test*.py" | grep -v "security_tests"); do
+            echo "\nEjecutando $test_file:" >> ./security-test-reports/security-tests.txt
+            python -m pytest $test_file -v --no-header >> ./security-test-reports/security-tests.txt || true
+          done
+
+      # Generar informe de cobertura para tests de seguridad
+      - name: Generate security test coverage
+        run: |
+          if [ -d "security_tests" ]; then
+            python -m coverage run --source=security_tests -m pytest security_tests || true
+            python -m coverage xml -o ./security-test-reports/security-coverage.xml
+            python -m coverage report > ./security-test-reports/security-coverage.txt
+          fi
+
+      # Subir resultados
+      - name: Upload security test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-test-reports
+          path: ./security-test-reports/ 
