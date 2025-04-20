@@ -1,453 +1,142 @@
 name: DefectDojo Integration
 
 on:
-  workflow_run:
-    workflows: ["DevSecOps Pipeline Integrado", "Security Tests Pipeline"]
-    types: [completed]
   workflow_dispatch:
+
+env:
+  DOJO_URL: http://localhost:8080
+  DOJO_API_KEY: ad3363c96f2d30b87758b6ea43b8cd10caaaf4c9
+  DOJO_PRODUCT_ID: 1
 
 jobs:
   defectdojo-import:
-    runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, dojo-runner]
+
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python 3.9
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-          
-      - name: Instalar dependencias
+
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests
-          
-      - name: Descargar artefactos
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          workflow: ${{ github.event.workflow_run.workflow_id || 'DevSecOps Pipeline Integrado' }}
-          
-      - name: Preparar informes para DefectDojo
+
+      - name: Prepare report folder
+        run: mkdir -p reports-to-upload
+
+      - name: Create dummy findings (sin is_Mitigated)
         run: |
-          mkdir -p reports
-          
-          # Mover los informes disponibles a la carpeta de informes
-          find . -name "*.json" -o -name "*.xml" -o -name "*.html" -o -name "*.sarif" | grep -v "node_modules" | xargs -I {} cp {} reports/ || echo "No se encontraron informes"
-          
-          ls -la reports/
-          
-      - name: Crear producto si no existe
-        run: |
-          echo "Verificando si el producto existe en DefectDojo"
-          
-          cat << 'EOF' > create_product.py
-          import os
-          import sys
-          import requests
-          import json
-          
-          # Configuración
-          DEFECTDOJO_URL = os.environ.get('DEFECTDOJO_URL', 'https://defectdojo.example.com')
-          DEFECTDOJO_API_KEY = os.environ.get('DEFECTDOJO_API_KEY')
-          
-          if not DEFECTDOJO_API_KEY:
-              print("Error: DEFECTDOJO_API_KEY no está configurada")
-              sys.exit(1)
-          
-          headers = {
-              'Authorization': f'Token {DEFECTDOJO_API_KEY}',
-              'Content-Type': 'application/json'
-          }
-          
-          # Datos del producto
-          product_name = 'django-ecommerce-electrodomesticos'
-          product_data = {
-              'name': product_name,
-              'description': 'Aplicación Django para una tienda de electrodomésticos',
-              'prod_type': 1  # Ajustar según la configuración de DefectDojo
-          }
-          
-          # Verificar si el producto existe
-          response = requests.get(
-              f'{DEFECTDOJO_URL}/api/v2/products/?name={product_name}',
-              headers=headers
-          )
-          
-          products = response.json().get('results', [])
-          
-          if products:
-              print(f"Producto '{product_name}' encontrado con ID: {products[0]['id']}")
-              product_id = products[0]['id']
-          else:
-              # Crear producto
-              print(f"Creando producto '{product_name}'...")
-              response = requests.post(
-                  f'{DEFECTDOJO_URL}/api/v2/products/',
-                  headers=headers,
-                  json=product_data
-              )
-              
-              if response.status_code == 201:
-                  product_id = response.json()['id']
-                  print(f"Producto creado con ID: {product_id}")
-              else:
-                  print(f"Error al crear producto: {response.status_code} - {response.text}")
-                  sys.exit(1)
-          
-          # Guardar el ID del producto para usarlo en otros scripts
-          with open('product_id.txt', 'w') as f:
-              f.write(str(product_id))
-          EOF
-          
-          python create_product.py
-          
-      - name: Crear engagement
-        run: |
-          echo "Creando engagement en DefectDojo"
-          
-          cat << 'EOF' > create_engagement.py
-          import os
-          import sys
-          import requests
-          import json
-          from datetime import datetime, timedelta
-          
-          # Configuración
-          DEFECTDOJO_URL = os.environ.get('DEFECTDOJO_URL', 'https://defectdojo.example.com')
-          DEFECTDOJO_API_KEY = os.environ.get('DEFECTDOJO_API_KEY')
-          
-          if not DEFECTDOJO_API_KEY:
-              print("Error: DEFECTDOJO_API_KEY no está configurada")
-              sys.exit(1)
-          
-          headers = {
-              'Authorization': f'Token {DEFECTDOJO_API_KEY}',
-              'Content-Type': 'application/json'
-          }
-          
-          # Leer el ID del producto
-          try:
-              with open('product_id.txt', 'r') as f:
-                  product_id = int(f.read().strip())
-          except:
-              print("Error: No se pudo leer el ID del producto")
-              sys.exit(1)
-          
-          # Fechas
-          today = datetime.now().strftime('%Y-%m-%d')
-          end_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-          
-          # Datos del engagement
-          engagement_name = f'CI/CD Security Scan - {today}'
-          engagement_data = {
-              'name': engagement_name,
-              'product': product_id,
-              'target_start': today,
-              'target_end': end_date,
-              'status': 'In Progress',
-              'engagement_type': 'CI/CD',
-              'active': True
-          }
-          
-          # Crear engagement
-          response = requests.post(
-              f'{DEFECTDOJO_URL}/api/v2/engagements/',
-              headers=headers,
-              json=engagement_data
-          )
-          
-          if response.status_code == 201:
-              engagement_id = response.json()['id']
-              print(f"Engagement creado con ID: {engagement_id}")
-              
-              # Guardar el ID del engagement para usarlo en otros scripts
-              with open('engagement_id.txt', 'w') as f:
-                  f.write(str(engagement_id))
-          else:
-              print(f"Error al crear engagement: {response.status_code} - {response.text}")
-              sys.exit(1)
-          EOF
-          
-          python create_engagement.py
-          
-      - name: Importar informes a DefectDojo
-        run: |
-          echo "Importando informes a DefectDojo"
-          
-          cat << 'EOF' > import_scans.py
-          import os
-          import sys
-          import requests
-          import json
-          import glob
-          
-          # Configuración
-          DEFECTDOJO_URL = os.environ.get('DEFECTDOJO_URL', 'https://defectdojo.example.com')
-          DEFECTDOJO_API_KEY = os.environ.get('DEFECTDOJO_API_KEY')
-          
-          if not DEFECTDOJO_API_KEY:
-              print("Error: DEFECTDOJO_API_KEY no está configurada")
-              sys.exit(1)
-          
-          headers = {
-              'Authorization': f'Token {DEFECTDOJO_API_KEY}'
-          }
-          
-          # Leer el ID del engagement
-          try:
-              with open('engagement_id.txt', 'r') as f:
-                  engagement_id = int(f.read().strip())
-          except:
-              print("Error: No se pudo leer el ID del engagement")
-              sys.exit(1)
-          
-          # Mapeo de extensiones de archivo a tipos de escaneo
-          scan_type_map = {
-              'sarif': 'SARIF',
-              'xml': 'XML',
-              'json': {
-                  'dependency-check': 'Dependency Check',
-                  'trivy': 'Trivy Scan',
-                  'zap': 'ZAP Scan',
-                  'bandit': 'Bandit Scan',
-                  'security_findings': 'Generic Findings Import'
-              },
-              'html': 'Generic Findings Import'
-          }
-          
-          # Obtener lista de archivos en la carpeta reports
-          report_files = glob.glob('reports/*')
-          
-          for report_file in report_files:
-              file_ext = report_file.split('.')[-1].lower()
-              file_name = os.path.basename(report_file)
-              
-              # Determinar el tipo de escaneo
-              scan_type = None
-              
-              if file_ext in scan_type_map:
-                  if isinstance(scan_type_map[file_ext], dict):
-                      # Para JSON, intentamos determinar el tipo específico por el nombre del archivo
-                      for key, value in scan_type_map[file_ext].items():
-                          if key in file_name.lower():
-                              scan_type = value
-                              break
-                      if not scan_type:
-                          # Si no encontramos un tipo específico, usamos Generic Findings Import
-                          scan_type = 'Generic Findings Import'
-                  else:
-                      scan_type = scan_type_map[file_ext]
-              else:
-                  # Si no reconocemos la extensión, usamos Generic Findings Import
-                  scan_type = 'Generic Findings Import'
-              
-              print(f"Importando {file_name} como {scan_type}...")
-              
-              # Preparar datos multipart
-              files = {'file': (file_name, open(report_file, 'rb'))}
-              data = {
-                  'engagement': engagement_id,
-                  'scan_type': scan_type,
-                  'active': 'true',
-                  'verified': 'true',
-                  'close_old_findings': 'true'
+          cat > reports-to-upload/basic-findings.json << 'EOF'
+          {
+            "findings": [
+              {
+                "title": "Ejemplo de hallazgo de seguridad",
+                "description": "Hallazgo de ejemplo desde GitHub Actions",
+                "severity": "Medium",
+                "date": "2023-05-30",
+                "mitigation": "Implementar medidas recomendadas",
+                "impact": "Potencial exposición",
+                "steps_to_reproduce": "Paso a paso…",
+                "references": "https://owasp.org/Top10/"
               }
-              
-              # Enviar a DefectDojo
-              response = requests.post(
-                  f'{DEFECTDOJO_URL}/api/v2/import-scan/',
-                  headers=headers,
-                  files=files,
-                  data=data
-              )
-              
-              if response.status_code in [200, 201]:
-                  print(f"Informe importado correctamente: {file_name}")
-              else:
-                  print(f"Error al importar {file_name}: {response.status_code} - {response.text}")
+            ]
+          }
           EOF
-          
-          python import_scans.py
+
+      - name: Verify product exists in DefectDojo
         env:
-          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
-          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
-          
-      - name: Generar resumen de resultados
+          DOJO_URL: ${{ env.DOJO_URL }}
+          DOJO_API_KEY: ${{ env.DOJO_API_KEY }}
+          DOJO_PRODUCT_ID: ${{ env.DOJO_PRODUCT_ID }}
         run: |
-          echo "Generando resumen de vulnerabilidades encontradas"
-          
-          cat << 'EOF' > generate_summary.py
-          import os
-          import sys
-          import requests
-          import json
-          
-          # Configuración
-          DEFECTDOJO_URL = os.environ.get('DEFECTDOJO_URL', 'https://defectdojo.example.com')
-          DEFECTDOJO_API_KEY = os.environ.get('DEFECTDOJO_API_KEY')
-          
-          if not DEFECTDOJO_API_KEY:
-              print("Error: DEFECTDOJO_API_KEY no está configurada")
-              sys.exit(1)
-          
-          headers = {
-              'Authorization': f'Token {DEFECTDOJO_API_KEY}',
-              'Content-Type': 'application/json'
-          }
-          
-          # Leer los IDs
-          try:
-              with open('product_id.txt', 'r') as f:
-                  product_id = int(f.read().strip())
-              
-              with open('engagement_id.txt', 'r') as f:
-                  engagement_id = int(f.read().strip())
-          except:
-              print("Error: No se pudieron leer los IDs")
-              sys.exit(1)
-          
-          # Obtener findings
-          response = requests.get(
-              f'{DEFECTDOJO_URL}/api/v2/findings/?test__engagement={engagement_id}&limit=1000',
-              headers=headers
-          )
-          
-          if response.status_code != 200:
-              print(f"Error al obtener findings: {response.status_code} - {response.text}")
-              sys.exit(1)
-          
-          findings = response.json().get('results', [])
-          
-          # Contar por severidad
-          severity_counts = {
-              'Critical': 0,
-              'High': 0,
-              'Medium': 0,
-              'Low': 0,
-              'Info': 0
-          }
-          
-          for finding in findings:
-              severity = finding.get('severity', 'Info')
-              severity_counts[severity] += 1
-          
-          # Generar resumen
-          summary = {
-              'total_findings': len(findings),
-              'severity_counts': severity_counts,
-              'top_findings': []
-          }
-          
-          # Añadir top findings (Critical y High)
-          for finding in findings:
-              if finding.get('severity') in ['Critical', 'High']:
-                  summary['top_findings'].append({
-                      'title': finding.get('title'),
-                      'severity': finding.get('severity'),
-                      'cwe': finding.get('cwe'),
-                      'description': finding.get('description')[:200] + '...' if len(finding.get('description', '')) > 200 else finding.get('description', '')
-                  })
-          
-          # Guardar el resumen como JSON
-          with open('vulnerability_summary.json', 'w') as f:
-              json.dump(summary, f, indent=2)
-          
-          # Imprimir resumen
-          print("\n==== RESUMEN DE VULNERABILIDADES ====")
-          print(f"Total de findings: {summary['total_findings']}")
-          print("\nPor severidad:")
-          for severity, count in severity_counts.items():
-              print(f"  {severity}: {count}")
-          
-          if summary['top_findings']:
-              print("\nTop vulnerabilidades:")
-              for i, finding in enumerate(summary['top_findings'], 1):
-                  print(f"  {i}. [{finding['severity']}] {finding['title']}")
-          print("====================================")
-          EOF
-          
-          python generate_summary.py
-        env:
-          DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
-          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
-          
-      - name: Crear informe de GitHub Security Code Scanning
-        run: |
-          echo "Obteniendo resultados de GitHub Code Scanning y añadiéndolos al resumen"
-          
-          # Este paso requiere PAT con permisos security_events:read
-          if [ -n "${{ secrets.GITHUB_TOKEN }}" ]; then
-            cat << 'EOF' > get_codeql_alerts.py
-            import os
-            import sys
-            import requests
-            import json
-            
-            # Configuración
-            GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
-            GITHUB_REPO = os.environ.get('GITHUB_REPOSITORY')
-            
-            if not GITHUB_TOKEN:
-                print("Error: GITHUB_TOKEN no está configurada")
-                sys.exit(1)
-            
-            headers = {
-                'Authorization': f'Bearer {GITHUB_TOKEN}',
-                'Accept': 'application/vnd.github.v3+json'
-            }
-            
-            # Obtener alertas de Code Scanning
-            response = requests.get(
-                f'https://api.github.com/repos/{GITHUB_REPO}/code-scanning/alerts',
-                headers=headers
-            )
-            
-            if response.status_code != 200:
-                print(f"Error al obtener alertas: {response.status_code} - {response.text}")
-                sys.exit(1)
-            
-            alerts = response.json()
-            
-            # Guardar alertas
-            with open('codeql_alerts.json', 'w') as f:
-                json.dump(alerts, f, indent=2)
-            
-            # Imprimir resumen
-            print(f"\nTotal de alertas de CodeQL: {len(alerts)}")
-            
-            # Contar por severidad
-            severity_counts = {
-                'critical': 0,
-                'high': 0,
-                'medium': 0,
-                'low': 0,
-                'warning': 0,
-                'note': 0,
-                'error': 0
-            }
-            
-            for alert in alerts:
-                severity = alert.get('rule', {}).get('security_severity_level', 'note')
-                severity_counts[severity] += 1
-            
-            print("\nPor severidad:")
-            for severity, count in severity_counts.items():
-                if count > 0:
-                    print(f"  {severity.capitalize()}: {count}")
-            EOF
-            
-            python get_codeql_alerts.py
-          else
-            echo "GITHUB_TOKEN no está disponible. No se pueden obtener resultados de Code Scanning."
+          set -o errexit
+          echo "🔗 Verificando que el producto ${DOJO_PRODUCT_ID} existe en $DOJO_URL …"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${DOJO_URL}/api/v2/products/${DOJO_PRODUCT_ID}/" \
+            -H "Authorization: Token ${DOJO_API_KEY}")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Producto no encontrado (HTTP $HTTP_CODE)"
+            exit 1
           fi
-          
-      - name: Subir resumen de vulnerabilidades
-        uses: actions/upload-artifact@v3
-        with:
-          name: vulnerability-summary
-          path: |
-            vulnerability_summary.json
-            codeql_alerts.json
+          echo "✅ Producto validado (HTTP $HTTP_CODE)"
+
+      - name: Import into DefectDojo
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
+          DOJO_URL: ${{ env.DOJO_URL }}
+          DOJO_API_KEY: ${{ env.DOJO_API_KEY }}
+          DOJO_PRODUCT_ID: ${{ env.DOJO_PRODUCT_ID }}
+        run: |
+          cat > dojo_integration.py << 'PYCODE'
+          import os, sys, requests
+          from datetime import datetime, timedelta
+
+          dojo = os.getenv("DOJO_URL")
+          key  = os.getenv("DOJO_API_KEY")
+          pid  = os.getenv("DOJO_PRODUCT_ID")
+          hdrs = {"Authorization": f"Token {key}", "Accept": "application/json"}
+
+          # 1) Buscar o crear engagement
+          resp = requests.get(
+              f"{dojo}/api/v2/engagements/?product={pid}&active=true",
+              headers=hdrs, verify=False
+          )
+          if resp.status_code != 200:
+              print("❌ Error al listar engagements:", resp.status_code, resp.text)
+              sys.exit(1)
+
+          data = resp.json()
+          if data["count"] > 0:
+              eid = data["results"][0]["id"]
+              print(f"🔎 Engagement existente ID {eid}")
+          else:
+              today = datetime.now().date().isoformat()
+              end_date = (datetime.now() + timedelta(days=30)).date().isoformat()
+              payload = {
+                  "name": f"GH Scan {today}",
+                  "description": "Importado desde Actions",
+                  "target_start": today,
+                  "target_end": end_date,
+                  "product": pid,
+                  "active": True,
+                  "status": "In Progress"
+              }
+              cr = requests.post(
+                  f"{dojo}/api/v2/engagements/",
+                  headers={**hdrs, "Content-Type": "application/json"},
+                  json=payload, verify=False
+              )
+              if cr.status_code not in (200,201):
+                  print("❌ Error al crear engagement:", cr.status_code, cr.text)
+                  sys.exit(1)
+              eid = cr.json().get("id")
+              print(f"✅ Engagement creado ID {eid}")
+
+          # 2) Importar findings
+          with open("reports-to-upload/basic-findings.json", "rb") as f:
+              files = {"file": f}
+              form_data = {
+                  "scan_type": "Generic Findings Import",
+                  "engagement": str(eid),
+                  "active": "true",
+                  "verified": "false",
+                  "close_old_findings": "false"
+              }
+              im = requests.post(
+                  f"{dojo}/api/v2/import-scan/",
+                  headers={"Authorization": f"Token {key}"},
+                  files=files,
+                  data=form_data,
+                  verify=False
+              )
+              print("📥 Import response:", im.status_code, im.text)
+              if im.status_code not in (200,201):
+                  print("❌ Falló la importación")
+                  sys.exit(1)
+          PYCODE
+
+          python dojo_integration.py
