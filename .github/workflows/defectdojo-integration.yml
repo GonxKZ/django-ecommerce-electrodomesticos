@@ -29,7 +29,7 @@ jobs:
       - name: Prepare report folder
         run: mkdir -p reports-to-upload
 
-      - name: Create dummy findings
+      - name: Create dummy findings (sin is_Mitigated)
         run: |
           cat > reports-to-upload/basic-findings.json << 'EOF'
           {
@@ -40,7 +40,6 @@ jobs:
                 "severity": "Medium",
                 "date": "2023-05-30",
                 "mitigation": "Implementar medidas recomendadas",
-                "is_Mitigated": false,
                 "impact": "Potencial exposición",
                 "steps_to_reproduce": "Paso a paso…",
                 "references": "https://owasp.org/Top10/"
