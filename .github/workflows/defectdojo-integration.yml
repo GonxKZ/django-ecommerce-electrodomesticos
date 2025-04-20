@@ -2,193 +2,102 @@ name: DefectDojo Integration
 
 on:
   workflow_dispatch:
-    inputs:
-      skip_download:
-        description: 'Omitir descarga de artefactos (usar solo para pruebas)'
-        type: boolean
-        default: false
+
+env:
+  DOJO_URL: http://localhost:8080
+  DOJO_API_KEY: d75510fc3f6e64db9672d066daac9c50e7e74637
+  DOJO_PRODUCT_ID: 1
 
 jobs:
   defectdojo-import:
-    runs-on: ubuntu-latest
-    
+    runs-on: [self-hosted, dojo-runner]
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
-      
+          python-version: "3.9"
+
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install requests
-      
-      - name: Create directories
+
+      - name: Create reports folders
         run: |
-          mkdir -p ./security-reports
-          mkdir -p ./reports-to-upload
-      
-      # Método simple para crear un archivo de resultados básico
+          mkdir -p security-reports reports-to-upload
+
       - name: Create basic scan results
         run: |
-          echo "Creando archivo de ejemplo para DefectDojo..."
-          cat > ./reports-to-upload/basic-findings.json << 'EOF'
+          cat > reports-to-upload/basic-findings.json << 'EOF'
           {
             "findings": [
               {
                 "title": "Ejemplo de hallazgo de seguridad",
-                "description": "Este es un hallazgo de ejemplo creado para probar la integración con DefectDojo",
+                "description": "Hallazgo de ejemplo desde GitHub Actions",
                 "severity": "Medium",
                 "date": "2023-05-30",
-                "mitigation": "Implementar las medidas de seguridad recomendadas",
+                "mitigation": "Implementar medidas recomendadas",
                 "is_Mitigated": false,
-                "impact": "Potencial exposición de datos",
-                "steps_to_reproduce": "Este es un hallazgo de prueba",
+                "impact": "Potencial exposición",
+                "steps_to_reproduce": "Paso a paso…",
                 "references": "https://owasp.org/Top10/"
               }
             ]
           }
           EOF
-          
-          echo "Contenido del archivo creado:"
-          cat ./reports-to-upload/basic-findings.json
-      
-      # Integración con DefectDojo
+
       - name: Import to DefectDojo
+        env:
+          DOJO_URL: ${{ env.DOJO_URL }}
+          DOJO_API_KEY: ${{ env.DOJO_API_KEY }}
+          DOJO_PRODUCT_ID: ${{ env.DOJO_PRODUCT_ID }}
         run: |
-          # Configuración
-          DOJO_URL="https://demo.defectdojo.org"
-          DOJO_API_KEY="548afd6fab3bea9794a41b31da0e9404f733e222"
-          DOJO_PRODUCT_ID="4"
-          
-          echo "Verificando conexión con DefectDojo..."
-          curl -s -I "$DOJO_URL/api/v2/" -H "Authorization: Token $DOJO_API_KEY"
-          
-          # Script Python para interactuar con DefectDojo
-          cat > ./dojo_integration.py << 'EOF'
-          import os
-          import sys
-          import json
-          import requests
+          echo "Verificando conexión con Dojo en $DOJO_URL …"
+          curl -sfI "${DOJO_URL}/api/v2/" -H "Authorization: Token ${DOJO_API_KEY}"
+
+          cat > dojo_integration.py << 'PYCODE'
+          import os, sys, json, requests
           from datetime import datetime, timedelta
-          
-          def main():
-              # Configuración de conexión
-              dojo_url = os.environ.get('DOJO_URL', '')
-              api_key = os.environ.get('DOJO_API_KEY', '')
-              product_id = os.environ.get('DOJO_PRODUCT_ID', '')
-              
-              headers = {
-                  'Authorization': f'Token {api_key}',
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json'
+
+          dojo = os.getenv("DOJO_URL")
+          key  = os.getenv("DOJO_API_KEY")
+          pid  = os.getenv("DOJO_PRODUCT_ID")
+          hdrs = {"Authorization": f"Token {key}", "Accept":"application/json"}
+
+          # 1) Comprueba producto
+          r = requests.get(f"{dojo}/api/v2/products/{pid}/", headers=hdrs, verify=False)
+          if r.status_code!=200:
+              print("Error producto:", r.status_code, r.text); sys.exit(1)
+
+          # 2) Busca/crea engagement
+          q = requests.get(f"{dojo}/api/v2/engagements/?product={pid}&active=true", headers=hdrs, verify=False).json()
+          if q["count"]>0:
+              eid = q["results"][0]["id"]
+          else:
+              today = datetime.now().date().isoformat()
+              end   = (datetime.now()+timedelta(days=30)).date().isoformat()
+              data = {
+                "name": f"GH Scan {today}", "description":"Desde Actions",
+                "target_start": today, "target_end": end,
+                "product": pid, "active":True, "status":"In Progress"
               }
-              
-              # 1. Verificar la conexión
-              try:
-                  response = requests.get(f"{dojo_url}/api/v2/products/{product_id}/", headers=headers)
-                  if response.status_code == 200:
-                      product_data = response.json()
-                      print(f"Conexión exitosa a DefectDojo. Producto: {product_data.get('name', 'Desconocido')}")
-                  else:
-                      print(f"Error al conectar con DefectDojo: {response.status_code}")
-                      print(response.text)
-                      sys.exit(1)
-              except Exception as e:
-                  print(f"Excepción al conectar con DefectDojo: {e}")
-                  sys.exit(1)
-              
-              # 2. Buscar o crear un engagement
-              try:
-                  # Buscar engagements activos
-                  response = requests.get(
-                      f"{dojo_url}/api/v2/engagements/?product={product_id}&active=true",
-                      headers=headers
-                  )
-                  
-                  engagement_id = None
-                  
-                  if response.status_code == 200:
-                      data = response.json()
-                      if data['count'] > 0:
-                          engagement_id = data['results'][0]['id']
-                          print(f"Engagement activo encontrado: ID {engagement_id}")
-                  
-                  # Crear nuevo engagement si no existe uno activo
-                  if not engagement_id:
-                      today = datetime.now().strftime('%Y-%m-%d')
-                      end_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-                      
-                      engagement_data = {
-                          "name": f"GitHub Security Scan {today}",
-                          "description": "Importación automática desde GitHub Actions",
-                          "target_start": today,
-                          "target_end": end_date,
-                          "product": product_id,
-                          "active": True,
-                          "status": "In Progress"
-                      }
-                      
-                      response = requests.post(
-                          f"{dojo_url}/api/v2/engagements/",
-                          headers=headers,
-                          json=engagement_data
-                      )
-                      
-                      if response.status_code in [200, 201]:
-                          engagement_id = response.json()['id']
-                          print(f"Nuevo engagement creado: ID {engagement_id}")
-                      else:
-                          print(f"Error al crear engagement: {response.status_code}")
-                          print(response.text)
-                          sys.exit(1)
-              except Exception as e:
-                  print(f"Excepción al gestionar engagement: {e}")
-                  sys.exit(1)
-              
-              # 3. Importar hallazgos
-              try:
-                  # Importar desde archivo básico
-                  with open('./reports-to-upload/basic-findings.json', 'rb') as f:
-                      files = {'file': f}
-                      data = {
-                          'scan_type': 'Generic Findings Import',
-                          'engagement': engagement_id,
-                          'verified': 'false',
-                          'active': 'true',
-                          'close_old_findings': 'false',
-                      }
-                      
-                      response = requests.post(
-                          f"{dojo_url}/api/v2/import-scan/",
-                          headers={'Authorization': f'Token {api_key}'},
-                          files=files,
-                          data=data
-                      )
-                      
-                      if response.status_code in [200, 201]:
-                          print("Importación exitosa a DefectDojo!")
-                          result = response.json()
-                          print(f"Hallazgos procesados: {result.get('processed', 0)}")
-                          print(f"Hallazgos creados: {result.get('created', 0)}")
-                          print(f"URL del engagement: {dojo_url}/engagement/{engagement_id}")
-                      else:
-                          print(f"Error al importar hallazgos: {response.status_code}")
-                          print(response.text)
-              except Exception as e:
-                  print(f"Excepción al importar hallazgos: {e}")
-          
-          if __name__ == "__main__":
-              main()
-          EOF
-          
-          # Ejecutar el script
-          export DOJO_URL="$DOJO_URL"
-          export DOJO_API_KEY="$DOJO_API_KEY"
-          export DOJO_PRODUCT_ID="$DOJO_PRODUCT_ID"
-          
-          echo "Ejecutando integración con DefectDojo..."
-          python ./dojo_integration.py 
+              cr = requests.post(f"{dojo}/api/v2/engagements/", headers={**hdrs, "Content-Type":"application/json"}, json=data, verify=False)
+              eid = cr.json().get("id")
+
+          # 3) Importa el JSON
+          with open("reports-to-upload/basic-findings.json","rb") as f:
+              files = {"file": f}
+              form  = {
+                "scan_type":"Generic Findings Import",
+                "engagement": str(eid),
+                "active":"true","verified":"false","close_old_findings":"false"
+              }
+              im = requests.post(f"{dojo}/api/v2/import-scan/", headers={"Authorization":f"Token {key}"}, files=files, data=form, verify=False)
+              print("Import response:", im.status_code, im.text)
+          PYCODE
+
+          python dojo_integration.py
