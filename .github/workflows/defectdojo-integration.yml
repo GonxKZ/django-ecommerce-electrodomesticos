@@ -26,11 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Prepare report folders
-        run: |
-          mkdir -p security-reports reports-to-upload
+      - name: Prepare report folder
+        run: mkdir -p reports-to-upload
 
-      - name: Generate dummy findings JSON
+      - name: Create dummy findings
         run: |
           cat > reports-to-upload/basic-findings.json << 'EOF'
           {
@@ -58,7 +57,7 @@ jobs:
         run: |
           set -o errexit
           echo "🔗 Verificando conexión con DefectDojo en $DOJO_URL …"
-          curl -sfI "${DOJO_URL}/api/v2/" -H "Authorization: Token ${DOJO_API_KEY}"
+          curl -sfI "$DOJO_URL/api/v2/" -H "Authorization: Token $DOJO_API_KEY"
 
           cat > dojo_integration.py << 'PYCODE'
           import os, sys, requests
@@ -76,13 +75,10 @@ jobs:
               sys.exit(1)
 
           # 2) Buscar o crear engagement
-          q = requests.get(
-              f"{dojo}/api/v2/engagements/?product={pid}&active=true",
-              headers=hdrs, verify=False
-          ).json()
+          q = requests.get(f"{dojo}/api/v2/engagements/?product={pid}&active=true",
+                           headers=hdrs, verify=False).json()
           if q["count"] > 0:
               eid = q["results"][0]["id"]
-              print(f"🔎 Engagement existente ID {eid}")
           else:
               today = datetime.now().date().isoformat()
               end   = (datetime.now() + timedelta(days=30)).date().isoformat()
@@ -95,14 +91,10 @@ jobs:
                 "active": True,
                 "status": "In Progress"
               }
-              cr = requests.post(
-                  f"{dojo}/api/v2/engagements/",
-                  headers={**hdrs, "Content-Type":"application/json"},
-                  json=payload,
-                  verify=False
-              )
-              eid = cr.json().get("id")
-              print(f"✅ Nuevo engagement creado ID {eid}")
+              resp = requests.post(f"{dojo}/api/v2/engagements/",
+                                   headers={**hdrs, "Content-Type":"application/json"},
+                                   json=payload, verify=False)
+              eid = resp.json().get("id")
 
           # 3) Importar findings
           with open("reports-to-upload/basic-findings.json","rb") as f:
@@ -114,13 +106,9 @@ jobs:
                 "verified": "false",
                 "close_old_findings": "false"
               }
-              im = requests.post(
-                  f"{dojo}/api/v2/import-scan/",
-                  headers={"Authorization": f"Token {key}"},
-                  files=files,
-                  data=data,
-                  verify=False
-              )
+              im = requests.post(f"{dojo}/api/v2/import-scan/",
+                                 headers={"Authorization": f"Token {key}"},
+                                 files=files, data=data, verify=False)
               print("📥 Import response:", im.status_code, im.text)
               if im.status_code not in (200, 201):
                   sys.exit(1)
