@@ -1,0 +1,7 @@
+10096	IGNORE	CSP: Wildcard Directive
+10038	IGNORE	Content Security Policy (CSP) Header Not Set
+10021	IGNORE	X-Content-Type-Options Header Missing
+10020	IGNORE	X-Frame-Options Header Not Set
+10017	IGNORE	Cross-Domain JavaScript Source File Inclusion
+10063	IGNORE	Feature Policy Header Not Set
+10099	IGNORE	Source Code Disclosure 

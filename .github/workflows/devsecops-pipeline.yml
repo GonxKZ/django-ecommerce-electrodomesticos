@@ -1,0 +1,231 @@
+name: DevSecOps Pipeline Integrado
+
+on:
+  push:
+    branches: [ develop, feature/security_team7 ]
+  pull_request:
+    branches: [ develop, main ]
+  schedule:
+    - cron: '0 0 * * 1'  # Ejecución programada semanalmente (lunes)
+  workflow_dispatch:
+
+jobs:
+  # FASE 1: ANÁLISIS DE CÓDIGO ESTÁTICO
+  sast-code-analysis:
+    name: Análisis Estático de Código
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v3
+
+      # Test unitarios de seguridad
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Ejecutar tests
+        run: |
+          python manage.py test
+          
+      # Análisis SAST con CodeQL y Bandit
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: python
+          queries: security-and-quality
+          
+      - name: Analizar con CodeQL
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:python"
+          
+      - name: Analizar con Bandit
+        run: |
+          pip install bandit
+          bandit -r . -x ./venv,./tests -f json -o bandit-results.json
+          
+      - name: Subir resultados de Bandit
+        uses: actions/upload-artifact@v3
+        with:
+          name: bandit-results
+          path: bandit-results.json
+          
+      - name: Convertir resultados para DefectDojo
+        run: |
+          # Crear formato compatible con DefectDojo
+          pip install requests
+          
+          python -c "
+          import json
+          import sys
+          
+          try:
+              # Cargar resultados de Bandit
+              with open('bandit-results.json') as f:
+                  try:
+                      bandit_data = json.load(f)
+                  except json.JSONDecodeError:
+                      bandit_data = {'results': []}
+              
+              findings = []
+              
+              # Procesar resultados de Bandit
+              for result in bandit_data.get('results', []):
+                  findings.append({
+                      'title': f\"Bandit: {result.get('test_id', '')} - {result.get('test_name', '')}\",
+                      'description': result.get('issue_text', ''),
+                      'severity': 'High' if result.get('issue_severity', '') == 'HIGH' else
+                                'Medium' if result.get('issue_severity', '') == 'MEDIUM' else 'Low',
+                      'file_path': result.get('filename', ''),
+                      'line': result.get('line_number', 0)
+                  })
+              
+              # Guardar en formato para DefectDojo
+              with open('security_findings.json', 'w') as f:
+                  json.dump({'findings': findings}, f)
+              
+              print('Conversión completada con éxito')
+          except Exception as e:
+              print(f'Error en la conversión: {str(e)}')
+              sys.exit(1)
+          "
+          
+  # FASE 2: ANÁLISIS DE DEPENDENCIAS  
+  sca-dependency-analysis:
+    name: Análisis de Dependencias
+    runs-on: ubuntu-latest
+    needs: sast-code-analysis
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          
+      - name: Ejecutar OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        id: dependency-check
+        with:
+          project: 'django-ecommerce-electrodomesticos'
+          path: '.'
+          format: 'ALL'
+          out: './reports/dependency-check'
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+      
+      - name: Subir informe de vulnerabilidades
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependency-check-report
+          path: ./reports/dependency-check
+          
+  # FASE 3: ANÁLISIS DE CONFIGURACIÓN E INFRAESTRUCTURA    
+  iac-security-analysis:
+    name: Análisis de Seguridad en Infraestructura
+    runs-on: ubuntu-latest
+    needs: sca-dependency-analysis
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Ejecutar Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          
+      - name: Subir resultados de Trivy
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+          
+  # FASE 4: PRUEBAS DINÁMICAS (SOLO EN ENTORNO DE DESARROLLO)    
+  dast-testing:
+    name: Análisis Dinámico de Seguridad
+    runs-on: ubuntu-latest
+    needs: iac-security-analysis
+    if: github.ref == 'refs/heads/develop'
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Preparar base de datos
+        run: |
+          python manage.py migrate
+          echo "from django.contrib.auth.models import User; User.objects.create_superuser('admin', 'admin@example.com', 'adminpassword')" | python manage.py shell
+          
+      - name: Iniciar servidor Django
+        run: |
+          python manage.py runserver &
+          echo "Servidor iniciado en segundo plano"
+          sleep 10
+          
+      - name: Ejecutar ZAP Scan
+        uses: zaproxy/action-baseline@v0.7.0
+        with:
+          target: 'http://localhost:8000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          
+      - name: Subir reporte ZAP
+        uses: actions/upload-artifact@v3
+        with:
+          name: zap-scan-report
+          path: |
+            zap-baseline.html
+            zap-baseline.xml
+            
+  # FASE 5: INTEGRACIÓN DE INFORMES CON DEFECTDOJO
+  security-report-integration:
+    name: Integración de Informes de Seguridad
+    runs-on: ubuntu-latest
+    needs: [sast-code-analysis, sca-dependency-analysis, iac-security-analysis, dast-testing]
+    if: always()
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Descargar todos los artefactos
+        uses: actions/download-artifact@v3
+        
+      - name: Preparar envío a DefectDojo
+        run: |
+          echo "Preparando informes para su envío a DefectDojo"
+          mkdir -p reports
+          
+          # Mover los artefactos a la carpeta de informes para su procesamiento
+          [ -d "dependency-check-report" ] && mv dependency-check-report/* reports/ || echo "No hay informe de dependencias"
+          [ -d "trivy-results" ] && mv trivy-results/* reports/ || echo "No hay informe de Trivy"
+          [ -d "zap-scan-report" ] && mv zap-scan-report/* reports/ || echo "No hay informe de ZAP"
+          [ -d "bandit-results" ] && mv bandit-results/* reports/ || echo "No hay informe de Bandit"
+          [ -d "security-findings" ] && mv security-findings/* reports/ || echo "No hay informe de hallazgos de seguridad"
+          
+      - name: Enviar informes a DefectDojo
+        run: |
+          echo "Enviando informes consolidados a DefectDojo"
+          # Aquí iría el código para enviar los resultados a DefectDojo
+          # Este paso se implementará en el objetivo 5 
