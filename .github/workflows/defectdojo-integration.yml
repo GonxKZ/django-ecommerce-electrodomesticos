@@ -5,7 +5,7 @@ on:
 
 env:
   DOJO_URL: http://localhost:8080
-  DOJO_API_KEY: d75510fc3f6e64db9672d066daac9c50e7e74637
+  DOJO_API_KEY: ad3363c96f2d30b87758b6ea43b8cd10caaaf4c9
   DOJO_PRODUCT_ID: 1
 
 jobs:
