@@ -1,0 +1,49 @@
+name: Security IaC Pipeline
+
+on:
+  push:
+    branches: [ develop, feature/security_team7 ]
+  pull_request:
+    branches: [ develop, main ]
+
+jobs:
+  trivy-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Ejecutar Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          
+      - name: Subir resultados de Trivy
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+          
+      - name: Ejecutar Trivy para escaneo de configuración
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-config-results.sarif'
+          
+      - name: Subir resultados de análisis de configuración
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-config-results
+          path: trivy-config-results.sarif
+          
+      - name: Enviar resultados a DefectDojo
+        if: always()
+        run: |
+          echo "Enviando resultados a DefectDojo para su gestión"
+          # Aquí iría el código para enviar los resultados a DefectDojo
+          # curl -X POST -H "Authorization: Token ${{ secrets.DEFECTDOJO_TOKEN }}" -F "file=@trivy-results.sarif" -F "scan_type=Trivy Scan" https://defectdojo.example.com/api/v2/import-scan/ 
