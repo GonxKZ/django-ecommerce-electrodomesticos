@@ -1,0 +1,143 @@
+name: DefectDojo Integration
+
+on:
+  workflow_dispatch:
+
+env:
+  DOJO_URL: http://localhost:8080
+  DOJO_API_KEY: ad3363c96f2d30b87758b6ea43b8cd10caaaf4c9
+  DOJO_PRODUCT_ID: 1
+
+jobs:
+  defectdojo-import:
+    runs-on: [self-hosted, dojo-runner]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Prepare report folder
+        run: mkdir -p reports-to-upload
+
+      - name: Create dummy findings (sin is_Mitigated)
+        run: |
+          cat > reports-to-upload/basic-findings.json << 'EOF'
+          {
+            "findings": [
+              {
+                "title": "Ejemplo de hallazgo de seguridad",
+                "description": "Hallazgo de ejemplo desde GitHub Actions",
+                "severity": "Medium",
+                "date": "2023-05-30",
+                "mitigation": "Implementar medidas recomendadas",
+                "impact": "Potencial exposición",
+                "steps_to_reproduce": "Paso a paso…",
+                "references": "https://owasp.org/Top10/"
+              }
+            ]
+          }
+          EOF
+
+          
+      - name: Verify product exists in DefectDojo
+        env:
+          DOJO_URL: ${{ env.DOJO_URL }}
+          DOJO_API_KEY: ${{ env.DOJO_API_KEY }}
+          DOJO_PRODUCT_ID: ${{ env.DOJO_PRODUCT_ID }}
+        run: |
+          set -o errexit
+          echo "🔗 Verificando que el producto ${DOJO_PRODUCT_ID} existe en $DOJO_URL …"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${DOJO_URL}/api/v2/products/${DOJO_PRODUCT_ID}/" \
+            -H "Authorization: Token ${DOJO_API_KEY}")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Producto no encontrado (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+          echo "✅ Producto validado (HTTP $HTTP_CODE)"
+
+      - name: Import into DefectDojo
+        env:
+          DOJO_URL: ${{ env.DOJO_URL }}
+          DOJO_API_KEY: ${{ env.DOJO_API_KEY }}
+          DOJO_PRODUCT_ID: ${{ env.DOJO_PRODUCT_ID }}
+        run: |
+          cat > dojo_integration.py << 'PYCODE'
+          import os, sys, requests
+          from datetime import datetime, timedelta
+
+          dojo = os.getenv("DOJO_URL")
+          key  = os.getenv("DOJO_API_KEY")
+          pid  = os.getenv("DOJO_PRODUCT_ID")
+          hdrs = {"Authorization": f"Token {key}", "Accept": "application/json"}
+
+          # 1) Buscar o crear engagement
+          resp = requests.get(
+              f"{dojo}/api/v2/engagements/?product={pid}&active=true",
+              headers=hdrs, verify=False
+          )
+          if resp.status_code != 200:
+              print("❌ Error al listar engagements:", resp.status_code, resp.text)
+              sys.exit(1)
+
+          data = resp.json()
+          if data["count"] > 0:
+              eid = data["results"][0]["id"]
+              print(f"🔎 Engagement existente ID {eid}")
+          else:
+              today = datetime.now().date().isoformat()
+              end_date = (datetime.now() + timedelta(days=30)).date().isoformat()
+              payload = {
+                  "name": f"GH Scan {today}",
+                  "description": "Importado desde Actions",
+                  "target_start": today,
+                  "target_end": end_date,
+                  "product": pid,
+                  "active": True,
+                  "status": "In Progress"
+              }
+              cr = requests.post(
+                  f"{dojo}/api/v2/engagements/",
+                  headers={**hdrs, "Content-Type": "application/json"},
+                  json=payload, verify=False
+              )
+              if cr.status_code not in (200,201):
+                  print("❌ Error al crear engagement:", cr.status_code, cr.text)
+                  sys.exit(1)
+              eid = cr.json().get("id")
+              print(f"✅ Engagement creado ID {eid}")
+
+          # 2) Importar findings
+          with open("reports-to-upload/basic-findings.json", "rb") as f:
+              files = {"file": f}
+              form_data = {
+                  "scan_type": "Generic Findings Import",
+                  "engagement": str(eid),
+                  "active": "true",
+                  "verified": "false",
+                  "close_old_findings": "false"
+              }
+              im = requests.post(
+                  f"{dojo}/api/v2/import-scan/",
+                  headers={"Authorization": f"Token {key}"},
+                  files=files,
+                  data=form_data,
+                  verify=False
+              )
+              print("📥 Import response:", im.status_code, im.text)
+              if im.status_code not in (200,201):
+                  print("❌ Falló la importación")
+                  sys.exit(1)
+          PYCODE
+
+          python dojo_integration.py
