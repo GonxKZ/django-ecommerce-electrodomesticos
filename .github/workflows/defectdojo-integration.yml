@@ -48,6 +48,7 @@ jobs:
           }
           EOF
 
+          
       - name: Verify product exists in DefectDojo
         env:
           DOJO_URL: ${{ env.DOJO_URL }}
